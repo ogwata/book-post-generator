@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callAI, buildSystemPrompt } from '@/lib/ai-client';
-import type { AISettings, BookInfo, ChatMessage } from '@/types';
+import { getAISettings } from '@/lib/env';
+import type { BookInfo, ChatMessage } from '@/types';
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, bookInfo, currentDraft, aiSettings } = (await req.json()) as {
+    const { messages, bookInfo, currentDraft } = (await req.json()) as {
       messages: ChatMessage[];
       bookInfo: BookInfo | null;
       currentDraft: string;
-      aiSettings: AISettings;
     };
 
-    if (!aiSettings?.apiKey) {
+    const aiSettings = getAISettings();
+    if (!aiSettings) {
       return NextResponse.json(
-        { error: 'AI APIキーが設定されていません' },
-        { status: 400 }
+        { error: 'AI が設定されていません。管理者に環境変数の設定を依頼してください。' },
+        { status: 500 }
       );
     }
 

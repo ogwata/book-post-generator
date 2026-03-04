@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { postTweet } from '@/lib/x-client';
-import type { XSettings } from '@/types';
+import { getXSettings } from '@/lib/env';
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, imageUrl, xSettings } = (await req.json()) as {
+    const { text, imageUrl } = (await req.json()) as {
       text: string;
       imageUrl?: string;
-      xSettings: XSettings;
     };
 
     if (!text || typeof text !== 'string') {
@@ -17,15 +16,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (
-      !xSettings?.apiKey ||
-      !xSettings?.apiSecret ||
-      !xSettings?.accessToken ||
-      !xSettings?.accessTokenSecret
-    ) {
+    const xSettings = getXSettings();
+    if (!xSettings) {
       return NextResponse.json(
-        { error: 'X (Twitter) のAPI設定が不完全です' },
-        { status: 400 }
+        { error: 'X (Twitter) APIが設定されていません。管理者に環境変数の設定を依頼してください。' },
+        { status: 500 }
       );
     }
 

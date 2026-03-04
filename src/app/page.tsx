@@ -4,6 +4,11 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { BookInfo, ChatMessage } from '@/types';
 import { countXChars, X_MAX_CHARS } from '@/lib/char-counter';
 
+interface ConfigStatus {
+  ai: { configured: boolean };
+  x: { configured: boolean };
+}
+
 export default function Home() {
   // --- State ---
   const [url, setUrl] = useState('');
@@ -15,10 +20,19 @@ export default function Home() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [postResult, setPostResult] = useState<{ url: string } | null>(null);
+  const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
 
   const charCount = countXChars(draftText);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // サーバーの設定状態を取得
+  useEffect(() => {
+    fetch('/api/status')
+      .then((res) => res.json())
+      .then((data) => setConfigStatus(data))
+      .catch(() => {});
+  }, []);
 
   // チャットの自動スクロール
   useEffect(() => {
@@ -41,14 +55,12 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
       setBookInfo(data);
 
-      // AI設定の確認
-      const aiSettings = getAISettings();
-      if (aiSettings?.apiKey) {
+      if (configStatus?.ai?.configured) {
         // AI で初期ドラフト生成
         const genRes = await fetch('/api/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bookInfo: data, aiSettings }),
+          body: JSON.stringify({ bookInfo: data }),
         });
         const genData = await genRes.json();
         if (genData.draft) {
@@ -71,7 +83,7 @@ export default function Home() {
           {
             role: 'assistant',
             content:
-              'AI が未設定のため、基本テンプレートで投稿文を作成しました。設定画面から AI を接続すると、自動要約・ハッシュタグ生成が利用できます。',
+              'AI が未設定のため、基本テンプレートで投稿文を作成しました。管理者に AI 接続の設定を依頼してください。',
           },
         ]);
       }
@@ -80,15 +92,14 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [url]);
+  }, [url, configStatus]);
 
   // --- チャット送信 ---
   const handleChat = useCallback(async () => {
     if (!chatInput.trim()) return;
 
-    const aiSettings = getAISettings();
-    if (!aiSettings?.apiKey) {
-      alert('AI が未設定です。設定画面から AI 接続を設定してください。');
+    if (!configStatus?.ai?.configured) {
+      alert('AI が未設定です。管理者に AI 接続の設定を依頼してください。');
       return;
     }
 
@@ -105,7 +116,6 @@ export default function Home() {
           messages: [...chatMessages, userMsg],
           bookInfo,
           currentDraft: draftText,
-          aiSettings,
         }),
       });
       const data = await res.json();
@@ -130,14 +140,13 @@ export default function Home() {
     } finally {
       setIsChatLoading(false);
     }
-  }, [chatInput, chatMessages, bookInfo, draftText]);
+  }, [chatInput, chatMessages, bookInfo, draftText, configStatus]);
 
   // --- X投稿 ---
   const handlePost = useCallback(async () => {
-    const xSettings = getXSettings();
-    if (!xSettings?.apiKey) {
+    if (!configStatus?.x?.configured) {
       alert(
-        'X (Twitter) のAPI設定がされていません。設定画面からAPI情報を入力してください。'
+        'X (Twitter) APIが設定されていません。管理者に環境変数の設定を依頼してください。'
       );
       return;
     }
@@ -164,7 +173,6 @@ export default function Home() {
         body: JSON.stringify({
           text: draftText,
           imageUrl: bookInfo?.coverImage,
-          xSettings,
         }),
       });
       const data = await res.json();
@@ -175,25 +183,9 @@ export default function Home() {
     } finally {
       setIsPosting(false);
     }
-  }, [draftText, charCount, bookInfo]);
+  }, [draftText, charCount, bookInfo, configStatus]);
 
   // --- ヘルパー ---
-  function getAISettings() {
-    try {
-      return JSON.parse(localStorage.getItem('aiSettings') || 'null');
-    } catch {
-      return null;
-    }
-  }
-
-  function getXSettings() {
-    try {
-      return JSON.parse(localStorage.getItem('xSettings') || 'null');
-    } catch {
-      return null;
-    }
-  }
-
   function buildFallbackDraft(info: BookInfo): string {
     const parts = [info.title];
     if (info.author) parts[0] += ` ${info.author}`;
@@ -209,7 +201,6 @@ export default function Home() {
     return parts.join('\n');
   }
 
-  // 文字数カウンターの色
   function charCountColor(): string {
     if (charCount > X_MAX_CHARS) return 'text-red-600 font-bold';
     if (charCount > 260) return 'text-yellow-600';
@@ -305,7 +296,6 @@ export default function Home() {
             AIチャット
           </label>
 
-          {/* メッセージエリア */}
           <div className="flex-1 min-h-[260px] max-h-[400px] overflow-y-auto chat-messages bg-gray-50 rounded-lg p-3 mb-3 space-y-3">
             {chatMessages.length === 0 ? (
               <p className="text-sm text-gray-400 text-center mt-8">
@@ -347,7 +337,6 @@ export default function Home() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* チャット入力 */}
           <div className="flex gap-2">
             <input
               type="text"
