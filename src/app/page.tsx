@@ -1,0 +1,426 @@
+'use client';
+
+import { useState, useRef, useEffect, useCallback } from 'react';
+import type { BookInfo, ChatMessage } from '@/types';
+import { countXChars, X_MAX_CHARS } from '@/lib/char-counter';
+
+export default function Home() {
+  // --- State ---
+  const [url, setUrl] = useState('');
+  const [bookInfo, setBookInfo] = useState<BookInfo | null>(null);
+  const [draftText, setDraftText] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isPosting, setIsPosting] = useState(false);
+  const [postResult, setPostResult] = useState<{ url: string } | null>(null);
+
+  const charCount = countXChars(draftText);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // チャットの自動スクロール
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  // --- 書籍情報取得 ---
+  const handleFetch = useCallback(async () => {
+    if (!url.trim()) return;
+    setIsLoading(true);
+    setPostResult(null);
+
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setBookInfo(data);
+
+      // AI設定の確認
+      const aiSettings = getAISettings();
+      if (aiSettings?.apiKey) {
+        // AI で初期ドラフト生成
+        const genRes = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bookInfo: data, aiSettings }),
+        });
+        const genData = await genRes.json();
+        if (genData.draft) {
+          setDraftText(genData.draft);
+          setChatMessages([
+            {
+              role: 'assistant',
+              content:
+                '書籍情報をもとに投稿文を生成しました。修正したい点があればこちらでお知らせください。',
+            },
+          ]);
+        } else {
+          setDraftText(buildFallbackDraft(data));
+          setChatMessages([]);
+        }
+      } else {
+        // AI未設定：フォールバック
+        setDraftText(buildFallbackDraft(data));
+        setChatMessages([
+          {
+            role: 'assistant',
+            content:
+              'AI が未設定のため、基本テンプレートで投稿文を作成しました。設定画面から AI を接続すると、自動要約・ハッシュタグ生成が利用できます。',
+          },
+        ]);
+      }
+    } catch (err: any) {
+      alert('取得エラー: ' + (err.message || '不明なエラー'));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [url]);
+
+  // --- チャット送信 ---
+  const handleChat = useCallback(async () => {
+    if (!chatInput.trim()) return;
+
+    const aiSettings = getAISettings();
+    if (!aiSettings?.apiKey) {
+      alert('AI が未設定です。設定画面から AI 接続を設定してください。');
+      return;
+    }
+
+    const userMsg: ChatMessage = { role: 'user', content: chatInput.trim() };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatInput('');
+    setIsChatLoading(true);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...chatMessages, userMsg],
+          bookInfo,
+          currentDraft: draftText,
+          aiSettings,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: data.message },
+      ]);
+
+      if (data.updatedDraft) {
+        setDraftText(data.updatedDraft);
+      }
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: 'エラーが発生しました: ' + (err.message || '不明なエラー'),
+        },
+      ]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [chatInput, chatMessages, bookInfo, draftText]);
+
+  // --- X投稿 ---
+  const handlePost = useCallback(async () => {
+    const xSettings = getXSettings();
+    if (!xSettings?.apiKey) {
+      alert(
+        'X (Twitter) のAPI設定がされていません。設定画面からAPI情報を入力してください。'
+      );
+      return;
+    }
+
+    if (charCount > X_MAX_CHARS) {
+      alert(
+        `文字数が${X_MAX_CHARS}文字を超えています（現在: ${charCount}文字）。${charCount - X_MAX_CHARS}文字削減してください。`
+      );
+      return;
+    }
+
+    if (!draftText.trim()) {
+      alert('投稿テキストが空です。');
+      return;
+    }
+
+    if (!confirm('この内容でXに投稿しますか？')) return;
+
+    setIsPosting(true);
+    try {
+      const res = await fetch('/api/post-to-x', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: draftText,
+          imageUrl: bookInfo?.coverImage,
+          xSettings,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setPostResult({ url: data.url });
+    } catch (err: any) {
+      alert('投稿エラー: ' + (err.message || '不明なエラー'));
+    } finally {
+      setIsPosting(false);
+    }
+  }, [draftText, charCount, bookInfo]);
+
+  // --- ヘルパー ---
+  function getAISettings() {
+    try {
+      return JSON.parse(localStorage.getItem('aiSettings') || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function getXSettings() {
+    try {
+      return JSON.parse(localStorage.getItem('xSettings') || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function buildFallbackDraft(info: BookInfo): string {
+    const parts = [info.title];
+    if (info.author) parts[0] += ` ${info.author}`;
+    if (info.price) parts[0] += ` ${info.price}`;
+    if (info.description) {
+      const desc =
+        info.description.length > 120
+          ? info.description.slice(0, 120) + '...'
+          : info.description;
+      parts.push(desc);
+    }
+    parts.push(info.url);
+    return parts.join('\n');
+  }
+
+  // 文字数カウンターの色
+  function charCountColor(): string {
+    if (charCount > X_MAX_CHARS) return 'text-red-600 font-bold';
+    if (charCount > 260) return 'text-yellow-600';
+    return 'text-gray-500';
+  }
+
+  // --- レンダリング ---
+  return (
+    <div className="space-y-4">
+      {/* 1. URL入力欄 */}
+      <section className="card p-4">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          書誌情報ページURL
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
+            placeholder="https://books.booko.co.jp/..."
+            className="input-field flex-1"
+            disabled={isLoading}
+          />
+          <button
+            onClick={handleFetch}
+            disabled={isLoading || !url.trim()}
+            className="btn-primary whitespace-nowrap"
+          >
+            {isLoading ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle
+                    className="opacity-25"
+                    cx="12" cy="12" r="10"
+                    stroke="currentColor" strokeWidth="4" fill="none"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+                取得中...
+              </span>
+            ) : (
+              '取得'
+            )}
+          </button>
+        </div>
+      </section>
+
+      {/* 書影プレビュー */}
+      {bookInfo?.coverImage && (
+        <div className="flex justify-center">
+          <img
+            src={bookInfo.coverImage}
+            alt={bookInfo.title || '書影'}
+            className="max-h-48 rounded-lg shadow-md object-contain"
+          />
+        </div>
+      )}
+
+      {/* 2 & 3. テキスト編集欄 + チャットウィンドウ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* テキスト編集欄 */}
+        <section className="card p-4 flex flex-col">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-700">
+              投稿テキスト
+            </label>
+            <span className={`text-sm ${charCountColor()}`}>
+              {charCount} / {X_MAX_CHARS}
+            </span>
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+            placeholder="書誌情報URLを入力して「取得」を押すと、投稿文が自動生成されます"
+            className="input-field flex-1 min-h-[300px] font-mono text-sm leading-relaxed"
+          />
+          {charCount > X_MAX_CHARS && (
+            <p className="text-red-600 text-xs mt-1">
+              {charCount - X_MAX_CHARS}文字オーバーしています
+            </p>
+          )}
+        </section>
+
+        {/* チャットウィンドウ */}
+        <section className="card p-4 flex flex-col">
+          <label className="text-sm font-medium text-gray-700 mb-2">
+            AIチャット
+          </label>
+
+          {/* メッセージエリア */}
+          <div className="flex-1 min-h-[260px] max-h-[400px] overflow-y-auto chat-messages bg-gray-50 rounded-lg p-3 mb-3 space-y-3">
+            {chatMessages.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center mt-8">
+                書籍情報を取得すると、AIが投稿文を生成します。
+                <br />
+                ここでAIと会話しながら投稿文を編集できます。
+              </p>
+            ) : (
+              chatMessages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${
+                      msg.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white border border-gray-200 text-gray-800'
+                    }`}
+                  >
+                    {msg.content}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {isChatLoading && (
+              <div className="flex justify-start">
+                <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
+                  <div className="loading-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* チャット入力 */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleChat();
+                }
+              }}
+              placeholder="例: もう少し短くして、ハッシュタグを追加して"
+              className="input-field flex-1"
+              disabled={isChatLoading}
+            />
+            <button
+              onClick={handleChat}
+              disabled={isChatLoading || !chatInput.trim()}
+              className="btn-primary"
+            >
+              送信
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {/* 4. X投稿ボタン */}
+      <section className="flex flex-col items-center gap-3 pt-2 pb-4">
+        <button
+          onClick={handlePost}
+          disabled={isPosting || !draftText.trim()}
+          className="btn-x flex items-center gap-2"
+        >
+          {isPosting ? (
+            <>
+              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                <circle
+                  className="opacity-25"
+                  cx="12" cy="12" r="10"
+                  stroke="currentColor" strokeWidth="4" fill="none"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              投稿中...
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+              </svg>
+              Xに投稿する
+            </>
+          )}
+        </button>
+
+        {postResult && (
+          <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800">
+            投稿が完了しました！{' '}
+            <a
+              href={postResult.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-medium"
+            >
+              投稿を確認する →
+            </a>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
