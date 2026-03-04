@@ -1,71 +1,38 @@
 import crypto from 'crypto';
+import OAuth from 'oauth-1.0a';
 import type { XSettings } from '@/types';
 
 /**
- * OAuth 1.0a 署名生成
+ * OAuth 1.0a クライアントを生成
  */
-function generateOAuthSignature(
-  method: string,
-  url: string,
-  params: Record<string, string>,
-  consumerSecret: string,
-  tokenSecret: string
-): string {
-  const sortedParams = Object.keys(params)
-    .sort()
-    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
-    .join('&');
-
-  const baseString = [
-    method.toUpperCase(),
-    encodeURIComponent(url),
-    encodeURIComponent(sortedParams),
-  ].join('&');
-
-  const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
-
-  return crypto
-    .createHmac('sha1', signingKey)
-    .update(baseString)
-    .digest('base64');
+function createOAuthClient(settings: XSettings) {
+  return new OAuth({
+    consumer: {
+      key: settings.apiKey,
+      secret: settings.apiSecret,
+    },
+    signature_method: 'HMAC-SHA1',
+    hash_function(baseString: string, key: string) {
+      return crypto.createHmac('sha1', key).update(baseString).digest('base64');
+    },
+  });
 }
 
 /**
- * OAuth 1.0a Authorization ヘッダー生成
+ * OAuth 1.0a Authorization ヘッダーを生成
  */
-function buildOAuthHeader(
-  method: string,
-  url: string,
+function getAuthHeader(
   settings: XSettings,
-  extraParams: Record<string, string> = {}
+  request: { url: string; method: string; data?: Record<string, string> }
 ): string {
-  const oauthParams: Record<string, string> = {
-    oauth_consumer_key: settings.apiKey,
-    oauth_nonce: crypto.randomBytes(16).toString('hex'),
-    oauth_signature_method: 'HMAC-SHA1',
-    oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
-    oauth_token: settings.accessToken,
-    oauth_version: '1.0',
+  const oauth = createOAuthClient(settings);
+  const token = {
+    key: settings.accessToken,
+    secret: settings.accessTokenSecret,
   };
-
-  const allParams = { ...oauthParams, ...extraParams };
-
-  const signature = generateOAuthSignature(
-    method,
-    url,
-    allParams,
-    settings.apiSecret,
-    settings.accessTokenSecret
-  );
-
-  oauthParams['oauth_signature'] = signature;
-
-  const headerParts = Object.keys(oauthParams)
-    .sort()
-    .map((key) => `${encodeURIComponent(key)}="${encodeURIComponent(oauthParams[key])}"`)
-    .join(', ');
-
-  return `OAuth ${headerParts}`;
+  const authorization = oauth.authorize(request, token);
+  const header = oauth.toHeader(authorization);
+  return header.Authorization;
 }
 
 /**
@@ -83,18 +50,20 @@ async function uploadMedia(
     const imgBuffer = await imgRes.arrayBuffer();
     const base64Data = Buffer.from(imgBuffer).toString('base64');
 
-    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
-    const mediaType = contentType.includes('png') ? 'image/png' : 'image/jpeg';
-
     // X media upload endpoint (v1.1)
     const uploadUrl = 'https://upload.twitter.com/1.1/media/upload.json';
 
-    const params: Record<string, string> = {
-      media_data: base64Data,
+    // OAuth署名にはmedia_dataを含めない（大きすぎるため X API の仕様）
+    // media_category のみ署名に含める
+    const signatureData: Record<string, string> = {
       media_category: 'tweet_image',
     };
 
-    const authHeader = buildOAuthHeader('POST', uploadUrl, settings);
+    const authHeader = getAuthHeader(settings, {
+      url: uploadUrl,
+      method: 'POST',
+      data: signatureData,
+    });
 
     const formData = new URLSearchParams();
     formData.append('media_data', base64Data);
@@ -110,7 +79,8 @@ async function uploadMedia(
     });
 
     if (!res.ok) {
-      console.error('Media upload failed:', await res.text());
+      const errText = await res.text();
+      console.error('Media upload failed:', errText);
       return null;
     }
 
@@ -139,12 +109,16 @@ export async function postTweet(
   // ツイート作成 (v2)
   const tweetUrl = 'https://api.twitter.com/2/tweets';
 
-  const body: any = { text };
+  const body: Record<string, unknown> = { text };
   if (mediaId) {
     body.media = { media_ids: [mediaId] };
   }
 
-  const authHeader = buildOAuthHeader('POST', tweetUrl, settings);
+  // JSON ボディの場合、署名にボディパラメータを含めない
+  const authHeader = getAuthHeader(settings, {
+    url: tweetUrl,
+    method: 'POST',
+  });
 
   const res = await fetch(tweetUrl, {
     method: 'POST',
