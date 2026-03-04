@@ -35,22 +35,59 @@ export async function scrapeBookInfo(url: string): Promise<BookInfo> {
 
 /** books.booko.co.jp 用スクレイパー */
 function scrapeBooko($: cheerio.CheerioAPI, url: string): BookInfo {
+  // 書名: h1.book-title を優先
   const title =
-    $('h1.entry-title').text().trim() ||
-    $('h1').first().text().trim() ||
-    ogTag($, 'og:title');
-
-  const author = extractAuthor($) || '';
-  const price = extractPrice($) || '';
-  const coverImage =
-    ogTag($, 'og:image') ||
-    $('article img').first().attr('src') ||
-    $('.entry-content img').first().attr('src') ||
+    $('h1.book-title').text().trim() ||
+    ogTag($, 'og:title').replace(/\s*\|.*$/, '') || // 「| Booko出版」を除去
     '';
-  const description =
-    ogTag($, 'og:description') ||
-    $('meta[name="description"]').attr('content') ||
-    extractDescription($);
+
+  // 著者名: h2.writer から「著者：」プレフィックスを除去
+  let author = $('h2.writer').text().trim();
+  author = author.replace(/^著者[：:]\s*/, '');
+  if (!author) {
+    author = extractAuthor($);
+  }
+
+  // 価格: div.infos-list 内の「価格：」を含む li
+  let price = '';
+  $('.infos-list li').each((_, el) => {
+    const text = $(el).text().trim();
+    if (text.includes('価格')) {
+      price = text.replace(/^価格[：:]\s*/, '');
+    }
+  });
+  if (!price) {
+    price = extractPrice($);
+  }
+
+  // 書影: スライダー内の最初の画像を優先、OGタグにフォールバック
+  const coverImage =
+    $('.detail-slider .swiper-slide:first-child .ph-box img').attr('src') ||
+    ogTag($, 'og:image') ||
+    '';
+
+  // 内容紹介: div.outline-txt 内のテキスト（見出し・リスト含む）
+  let description = '';
+  const outlineTxt = $('.outline-txt');
+  if (outlineTxt.length) {
+    // 最初の数段落を取得（レシピ一覧は除外）
+    const paragraphs: string[] = [];
+    outlineTxt.children('h2, p').each((_, el) => {
+      const text = $(el).text().trim();
+      if (text && paragraphs.join('').length < 500) {
+        paragraphs.push(text);
+      }
+    });
+    // 「この本の特徴」リストも取得
+    outlineTxt.find('ul').first().find('li').each((_, el) => {
+      const text = $(el).text().trim();
+      if (text) paragraphs.push('・' + text);
+    });
+    description = paragraphs.join('\n');
+  }
+  if (!description) {
+    description = ogTag($, 'og:description') || extractDescription($);
+  }
 
   return { title, author, price, coverImage, description, url };
 }
@@ -109,19 +146,34 @@ function scrapeGeneric($: cheerio.CheerioAPI, url: string): BookInfo {
   return { title, author, price, coverImage, description, url };
 }
 
-/** OGタグの取得 */
+/**
+ * OGタグの取得（空でない最初の値を返す）
+ * 同じpropertyのメタタグが複数ある場合、空でない最初のものを使用
+ */
 function ogTag($: cheerio.CheerioAPI, property: string): string {
-  return (
-    $(`meta[property="${property}"]`).attr('content') ||
-    $(`meta[name="${property}"]`).attr('content') ||
-    ''
-  );
+  let result = '';
+  $(`meta[property="${property}"]`).each((_, el) => {
+    if (!result) {
+      const content = $(el).attr('content')?.trim();
+      if (content) result = content;
+    }
+  });
+  if (!result) {
+    $(`meta[name="${property}"]`).each((_, el) => {
+      if (!result) {
+        const content = $(el).attr('content')?.trim();
+        if (content) result = content;
+      }
+    });
+  }
+  return result;
 }
 
 /** 著者名の抽出 */
 function extractAuthor($: cheerio.CheerioAPI): string {
   // 一般的な著者表示パターン
   const selectors = [
+    'h2.writer',
     '.author',
     '.book-author',
     '[itemprop="author"]',
@@ -129,8 +181,12 @@ function extractAuthor($: cheerio.CheerioAPI): string {
     '.writer',
   ];
   for (const sel of selectors) {
-    const text = $(sel).first().text().trim();
-    if (text) return text;
+    let text = $(sel).first().text().trim();
+    if (text) {
+      // 「著者：」等のプレフィックスを除去
+      text = text.replace(/^(?:著者|著|作者)[：:]\s*/, '');
+      return text;
+    }
   }
 
   // テキストからの抽出（「著者：」「著：」パターン）
@@ -143,6 +199,16 @@ function extractAuthor($: cheerio.CheerioAPI): string {
 
 /** 価格の抽出 */
 function extractPrice($: cheerio.CheerioAPI): string {
+  // infos-list パターン（Booko等）
+  let price = '';
+  $('.infos-list li').each((_, el) => {
+    const text = $(el).text().trim();
+    if (text.includes('価格')) {
+      price = text.replace(/^価格[：:]\s*/, '');
+    }
+  });
+  if (price) return price;
+
   const selectors = [
     '.price',
     '.book-price',
@@ -167,6 +233,7 @@ function extractPrice($: cheerio.CheerioAPI): string {
 /** 内容紹介の抽出 */
 function extractDescription($: cheerio.CheerioAPI): string {
   const selectors = [
+    '.outline-txt',
     '[itemprop="description"]',
     '.book-description',
     '.description',
@@ -174,8 +241,12 @@ function extractDescription($: cheerio.CheerioAPI): string {
     'article p',
   ];
   for (const sel of selectors) {
-    const text = $(sel).first().text().trim();
-    if (text && text.length > 20) return text;
+    const el = $(sel).first();
+    if (el.length) {
+      // ブロック要素の場合はテキストを連結
+      const text = el.find('p, li').map((_, child) => $(child).text().trim()).get().join('\n') || el.text().trim();
+      if (text && text.length > 20) return text;
+    }
   }
   return $('meta[name="description"]').attr('content') || '';
 }
