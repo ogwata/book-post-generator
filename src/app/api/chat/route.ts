@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callAI, buildSystemPrompt } from '@/lib/ai-client';
 import { getAISettings } from '@/lib/env';
+import { countXChars } from '@/lib/char-counter';
 import type { BookInfo, ChatMessage } from '@/types';
 
 export async function POST(req: NextRequest) {
@@ -26,7 +27,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const systemPrompt = buildSystemPrompt(bookInfo, currentDraft);
+    const currentCharCount = currentDraft ? countXChars(currentDraft) : undefined;
+    const systemPrompt = buildSystemPrompt(bookInfo, currentDraft, currentCharCount);
 
     const result = await callAI(messages, systemPrompt, aiSettings);
 

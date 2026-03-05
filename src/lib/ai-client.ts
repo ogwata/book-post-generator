@@ -1,8 +1,34 @@
 import type { AISettings, AIResponse, ChatMessage, BookInfo } from '@/types';
 
 /** ライティング・ポリシーを含むシステムプロンプト */
-export function buildSystemPrompt(bookInfo: BookInfo | null, currentDraft: string): string {
-  let prompt = `あなたは書籍紹介の投稿文を作成するアシスタントです。
+export function buildSystemPrompt(
+  bookInfo: BookInfo | null,
+  currentDraft: string,
+  currentCharCount?: number
+): string {
+  let prompt = `あなたは書籍紹介のX (Twitter) 投稿文を作成するアシスタントです。
+
+## 最重要ルール：280文字制限（厳守）
+
+Xの投稿は **280文字が上限** です。これを超えると投稿できません。
+必ず **250文字以内** を目標に生成してください（余裕を持たせるため）。
+
+### Xの文字カウント方式（通常の文字数と異なります）
+- **日本語・CJK文字**（漢字、ひらがな、カタカナ、全角記号）: **1文字 = 2としてカウント**
+- **半角英数字・半角記号**: 1文字 = 1としてカウント
+- **URL**: 長さに関係なく **1つ = 23としてカウント**
+- **改行**: 1つ = 1としてカウント
+- **ハッシュタグの#**: 半角 = 1、タグ内の日本語は各2としてカウント
+
+### 実質的な文字数バジェット
+- URL（23）+ 改行数分を引くと、テキスト部分に使えるのは約250程度
+- 日本語は1文字が2カウントなので、**日本語だけなら実質125文字程度**しか書けません
+- 書名＋著者名＋価格＋要約＋ハッシュタグ＋URLをすべて含めて280以内
+
+### 文字数を抑えるコツ
+- 内容紹介は1〜2文に凝縮する（長い説明は不要）
+- ハッシュタグは2〜3個に絞る
+- 冗長な表現を避け、体言止めや短い文を使う
 
 ## ライティング・ポリシー（厳守）
 
@@ -13,16 +39,9 @@ export function buildSystemPrompt(bookInfo: BookInfo | null, currentDraft: strin
 ## 投稿フォーマット
 
 書名 著者名 価格
-内容紹介（要約）
-ハッシュタグ
+内容紹介（1〜2文の簡潔な要約）
+ハッシュタグ（2〜3個）
 書誌情報URL
-
-## 投稿文の要件
-
-- 書誌ページ掲載の内容紹介を適宜要約する
-- 本が解決する課題、具体的なメリットを凝縮する
-- 内容にあった複数のハッシュタグを自動生成する
-- X (Twitter) の280文字制限を意識して簡潔にまとめる
 
 ## 投稿文更新時のルール
 
@@ -47,6 +66,15 @@ export function buildSystemPrompt(bookInfo: BookInfo | null, currentDraft: strin
 
   if (currentDraft) {
     prompt += `\n\n## 現在の投稿文ドラフト\n\n${currentDraft}`;
+    if (currentCharCount !== undefined) {
+      prompt += `\n\n## 現在の文字数状況\n\n`;
+      prompt += `- Xカウント: **${currentCharCount} / 280**\n`;
+      if (currentCharCount > 280) {
+        prompt += `- ⚠️ **${currentCharCount - 280}文字オーバーしています！文章を短縮してください。**\n`;
+      } else {
+        prompt += `- 残り: ${280 - currentCharCount}文字\n`;
+      }
+    }
   }
 
   return prompt;
@@ -54,20 +82,30 @@ export function buildSystemPrompt(bookInfo: BookInfo | null, currentDraft: strin
 
 /** 初期ドラフト生成用プロンプト */
 export function buildGeneratePrompt(bookInfo: BookInfo): string {
+  // URLのXカウント（23固定）と改行分を差し引いた残り文字数を計算
+  const urlCount = 23;
+  const newlineCount = 3; // フォーマット上3行の改行
+  const remainingBudget = 280 - urlCount - newlineCount;
+
   return `以下の書籍情報をもとに、X (Twitter) 向けの投稿文を生成してください。
+
+【最重要】Xカウントで280以内に必ず収めてください。
+- URLは23カウント固定、改行は各1カウント
+- 日本語1文字 = 2カウント、半角英数 = 1カウント
+- URL・改行を除くと残り約${remainingBudget}カウント（日本語のみなら約${Math.floor(remainingBudget / 2)}文字）
+- 内容紹介は1〜2文に凝縮し、ハッシュタグは2〜3個に絞ること
 
 フォーマット:
 書名 著者名 価格
-内容紹介の要約（本が解決する課題・具体的なメリットを凝縮）
-ハッシュタグ（#書名 #著者名 を含む複数のハッシュタグ）
-書誌情報URL
+内容紹介（1〜2文の簡潔な要約）
+ハッシュタグ（2〜3個）
+${bookInfo.url}
 
 ## 書籍情報
 - 書名: ${bookInfo.title}
 - 著者: ${bookInfo.author}
 - 価格: ${bookInfo.price}
 - 内容紹介: ${bookInfo.description}
-- URL: ${bookInfo.url}
 
 投稿文のみを返してください。余計な説明は不要です。`;
 }
