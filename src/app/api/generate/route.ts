@@ -5,7 +5,12 @@ import { countXChars, X_MAX_CHARS } from '@/lib/char-counter';
 import type { BookInfo, ChatMessage } from '@/types';
 
 const MAX_RETRIES = 2;
-const TARGET_CHARS = 270; // 280より少し余裕を持たせた目標
+const TARGET_MIN = 250;  // これ以下なら短すぎ → 引き伸ばし
+const TARGET_MAX = 275;  // これ以上なら長すぎ → 短縮
+
+function isInRange(count: number): boolean {
+  return count >= TARGET_MIN && count <= X_MAX_CHARS;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -37,16 +42,22 @@ export async function POST(req: NextRequest) {
     let draft = result.updatedDraft || result.message;
     let charCount = countXChars(draft);
 
-    // 280文字超過時は自動リトライ（最大MAX_RETRIES回）
-    for (let i = 0; i < MAX_RETRIES && charCount > X_MAX_CHARS; i++) {
-      const overBy = charCount - X_MAX_CHARS;
+    // 範囲外（短すぎ or 長すぎ）の場合は自動リトライ
+    for (let i = 0; i < MAX_RETRIES && !isInRange(charCount); i++) {
+      let retryInstruction: string;
+
+      if (charCount > X_MAX_CHARS) {
+        const overBy = charCount - X_MAX_CHARS;
+        retryInstruction = `この投稿文はXカウントで${charCount}文字あり、上限280を${overBy}文字超過しています。${TARGET_MAX}文字以下になるよう短縮してください。内容紹介を短くし、ハッシュタグを減らしてください。投稿文のみを返してください。`;
+      } else {
+        const shortBy = TARGET_MIN - charCount;
+        retryInstruction = `この投稿文はXカウントで${charCount}文字しかなく、短すぎます。${TARGET_MIN}〜${TARGET_MAX}文字の範囲になるよう、内容紹介をもう少し具体的にするか、関連するハッシュタグを追加してください。投稿文のみを返してください。`;
+      }
+
       const retryMessages: ChatMessage[] = [
         { role: 'user', content: userPrompt },
         { role: 'assistant', content: draft },
-        {
-          role: 'user',
-          content: `この投稿文はXカウントで${charCount}文字あり、上限280を${overBy}文字超過しています。${TARGET_CHARS}文字以下になるよう短縮してください。内容紹介をさらに短くし、ハッシュタグを減らしてください。投稿文のみを返してください。`,
-        },
+        { role: 'user', content: retryInstruction },
       ];
 
       result = await callAI(retryMessages, systemPrompt, aiSettings);

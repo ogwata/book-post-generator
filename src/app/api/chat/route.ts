@@ -5,7 +5,7 @@ import { countXChars, X_MAX_CHARS } from '@/lib/char-counter';
 import type { BookInfo, ChatMessage } from '@/types';
 
 const MAX_RETRIES = 2;
-const TARGET_CHARS = 270;
+const TARGET_MAX = 275;
 
 export async function POST(req: NextRequest) {
   try {
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
           { role: 'assistant', content: `${result.message}\n\n---DRAFT---\n${result.updatedDraft}\n---END_DRAFT---` },
           {
             role: 'user',
-            content: `提案された投稿文はXカウントで${draftCharCount}文字あり、上限280を${overBy}文字超過しています。${TARGET_CHARS}文字以下に短縮してください。`,
+            content: `提案された投稿文はXカウントで${draftCharCount}文字あり、上限280を${overBy}文字超過しています。${TARGET_MAX}文字以下に短縮してください。`,
           },
         ];
 
