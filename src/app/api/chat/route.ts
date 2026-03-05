@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { callAI, buildSystemPrompt } from '@/lib/ai-client';
+import { callAI, buildSystemPrompt, parseAIResponse } from '@/lib/ai-client';
 import { getAISettings } from '@/lib/env';
-import { countXChars } from '@/lib/char-counter';
+import { countXChars, X_MAX_CHARS } from '@/lib/char-counter';
 import type { BookInfo, ChatMessage } from '@/types';
+
+const MAX_RETRIES = 2;
+const TARGET_CHARS = 270;
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,7 +33,32 @@ export async function POST(req: NextRequest) {
     const currentCharCount = currentDraft ? countXChars(currentDraft) : undefined;
     const systemPrompt = buildSystemPrompt(bookInfo, currentDraft, currentCharCount);
 
-    const result = await callAI(messages, systemPrompt, aiSettings);
+    let result = await callAI(messages, systemPrompt, aiSettings);
+
+    // updatedDraft が280文字を超えていたら自動リトライ
+    if (result.updatedDraft) {
+      let draftCharCount = countXChars(result.updatedDraft);
+
+      for (let i = 0; i < MAX_RETRIES && draftCharCount > X_MAX_CHARS; i++) {
+        const overBy = draftCharCount - X_MAX_CHARS;
+        const retryMessages: ChatMessage[] = [
+          ...messages,
+          { role: 'assistant', content: `${result.message}\n\n---DRAFT---\n${result.updatedDraft}\n---END_DRAFT---` },
+          {
+            role: 'user',
+            content: `提案された投稿文はXカウントで${draftCharCount}文字あり、上限280を${overBy}文字超過しています。${TARGET_CHARS}文字以下に短縮してください。`,
+          },
+        ];
+
+        const updatedSystemPrompt = buildSystemPrompt(bookInfo, result.updatedDraft, draftCharCount);
+        result = await callAI(retryMessages, updatedSystemPrompt, aiSettings);
+        if (result.updatedDraft) {
+          draftCharCount = countXChars(result.updatedDraft);
+        } else {
+          break;
+        }
+      }
+    }
 
     return NextResponse.json(result);
   } catch (err: any) {
