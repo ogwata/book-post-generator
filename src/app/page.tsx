@@ -216,15 +216,29 @@ export default function Home() {
           書誌情報ページURL
         </label>
         <div className="flex gap-2">
-          <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
-            placeholder="https://books.booko.co.jp/..."
-            className="input-field flex-1"
-            disabled={isLoading}
-          />
+          <div className="relative flex-1">
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
+              placeholder="https://books.booko.co.jp/..."
+              className="input-field w-full pr-8"
+              disabled={isLoading}
+            />
+            {url && (
+              <button
+                onClick={() => setUrl('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-gray-400/60 hover:bg-gray-500/80 text-white transition-colors"
+                aria-label="URLをクリア"
+                type="button"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M3 3l6 6M9 3l-6 6" />
+                </svg>
+              </button>
+            )}
+          </div>
           <button
             onClick={handleFetch}
             disabled={isLoading || !url.trim()}
