@@ -6,11 +6,14 @@ import type { BookInfo } from '@/types';
  * OGタグ、JSON-LD、一般的なセレクタを使用
  */
 export async function scrapeBookInfo(url: string): Promise<BookInfo> {
+  const isAmazon = url.includes('amazon.co.jp') || url.includes('amazon.com');
   const response = await fetch(url, {
     headers: {
       'User-Agent':
-        'Mozilla/5.0 (compatible; BookPostGenerator/1.0)',
-      Accept: 'text/html,application/xhtml+xml',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': isAmazon ? 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7' : 'ja,en-US;q=0.9,en;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
     },
   });
 
@@ -94,26 +97,85 @@ function scrapeBooko($: cheerio.CheerioAPI, url: string): BookInfo {
 
 /** Amazon用スクレイパー */
 function scrapeAmazon($: cheerio.CheerioAPI, url: string): BookInfo {
+  // タイトル
   const title =
     $('#productTitle').text().trim() ||
-    ogTag($, 'og:title');
-  const author =
-    $('.author a').first().text().trim() ||
-    $('span.author').first().text().trim() ||
+    $('h1#title span').first().text().trim() ||
+    ogTag($, 'og:title').replace(/\s*[:|].*Amazon.*$/i, '').trim() ||
     '';
+
+  // 著者: #bylineInfo から取得
+  let author = '';
+  const bylineInfo = $('#bylineInfo');
+  if (bylineInfo.length) {
+    author = bylineInfo.find('.author:not(.userReviewCountSection) a').first().text().trim();
+    if (!author) {
+      author = bylineInfo.find('.contributorNameID').first().text().trim();
+    }
+    if (!author) {
+      // 「著」「訳」などの役割ラベルの後ろのテキスト
+      author = bylineInfo.find('a.a-link-normal').first().text().trim();
+    }
+  }
+  if (!author) {
+    author =
+      $('[data-feature-name="byline"] a').first().text().trim() ||
+      $('.author a').first().text().trim() ||
+      '';
+  }
+
+  // 価格: 複数の候補セレクターを試行
   const price =
     $('span.a-price span.a-offscreen').first().text().trim() ||
-    $('#price').text().trim() ||
+    $('#price_inside_buybox').text().trim() ||
+    $('#listPrice').text().trim() ||
+    $('#kindle-price').text().trim() ||
+    $('span#price').text().trim() ||
     '';
-  const coverImage =
-    $('#imgBlkFront').attr('src') ||
-    $('#landingImage').attr('src') ||
-    ogTag($, 'og:image') ||
-    '';
-  const description =
-    $('#bookDescription_feature_div span').text().trim() ||
-    ogTag($, 'og:description') ||
-    '';
+
+  // 書影: data-a-dynamic-image JSON から最高解像度を選択
+  let coverImage = '';
+  const imgEl = $('#landingImage, #imgBlkFront').first();
+  if (imgEl.length) {
+    const dynamicImages = imgEl.attr('data-a-dynamic-image');
+    if (dynamicImages) {
+      try {
+        const imgMap = JSON.parse(dynamicImages) as Record<string, [number, number]>;
+        let maxArea = 0;
+        for (const [imgUrl, dims] of Object.entries(imgMap)) {
+          const area = dims[0] * dims[1];
+          if (area > maxArea) {
+            maxArea = area;
+            coverImage = imgUrl;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!coverImage) {
+      coverImage = imgEl.attr('src') || '';
+    }
+  }
+  if (!coverImage) {
+    coverImage = ogTag($, 'og:image') || '';
+  }
+
+  // 内容紹介: noscript版（JavaScript不要）を優先
+  let description = '';
+  const descNoscript = $('#bookDescription_feature_div noscript');
+  if (descNoscript.length) {
+    const inner = descNoscript.html() || '';
+    const inner$ = cheerio.load(inner);
+    description = inner$('body').text().replace(/\s+/g, ' ').trim();
+  }
+  if (!description) {
+    description =
+      $('#bookDescription_feature_div span:not(#bookDescription_feature_div_truncated_content span)').first().text().trim() ||
+      $('#productDescription p').text().trim() ||
+      ogTag($, 'og:description') ||
+      '';
+  }
 
   return { title, author, price, coverImage, description, url };
 }
