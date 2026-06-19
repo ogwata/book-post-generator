@@ -1,0 +1,14 @@
+{
+  "_comment": "watch-list 設定。name=PyPIパッケージ名, current=現在運用中のバージョン(分かる範囲。container提供で不明なら null)。latest>current のとき更新ありとして通知します。current=null は情報表示のみ。",
+  "scan_notebooks": true,
+  "_scan_notebooks_comment": "true の場合、リポジトリ内の *.ipynb の 'pip install pkg==x.y.z' のピン留めを自動で取り込み、currentに反映します。",
+  "packages": [
+    { "name": "transformers",    "current": "4.57.0", "note": "transformers.pipeline (whisper-large-v3) で使用。v5 はメジャー変更あり" },
+    { "name": "ctranslate2",     "current": "4.4.0",  "note": "CUDA13非互換の4.4.0で停止中。CUDA13対応wheelが出れば faster-whisper 復活可" },
+    { "name": "pyannote.audio",  "current": "3.1.1",  "note": "speaker-diarization-3.1 を使用。v4 は API 変更あり" },
+    { "name": "whisperx",        "current": "3.8.0",  "note": "DGX Spark 構成で使用" },
+    { "name": "faster-whisper",  "current": "1.1.0",  "note": "休止中パス（CT2待ち）" },
+    { "name": "torch",           "current": null,     "note": "コンテナ/NGC 管理。情報表示のみ" },
+    { "name": "librosa",         "current": null,     "note": "前処理。情報表示のみ" }
+  ]
+}
