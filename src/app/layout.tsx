@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
 import { LogoutButton } from './logout-button';
-import { version } from '../../package.json';
+import pkg from '../../package.json';
 
 export const metadata: Metadata = {
   title: 'BookPost Generator',
@@ -22,7 +22,7 @@ export default function RootLayout({
             <Link href="/" className="flex items-center gap-2 text-lg font-bold text-gray-900">
               <span className="text-2xl">📚</span>
               <span>BookPost Generator</span>
-              <span className="text-xs font-normal text-gray-400">v{version}</span>
+              <span className="text-xs font-normal text-gray-400">v{pkg.version}</span>
             </Link>
             <div className="flex items-center gap-4">
               <Link
